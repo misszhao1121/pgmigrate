@@ -1,0 +1,14 @@
+# runtime state (contains connection info / watermarks, never commit)
+pgmigrate-last.json
+pgmigrate-watermark.json
+config.json
+*.local.json
+
+# build cache and artifacts not tracked
+.gocache/
+*.test
+*.out
+
+# editor
+.idea/
+.vscode/

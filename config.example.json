@@ -1,0 +1,34 @@
+{
+  "source": {
+    "host": "your-pg11-host",
+    "port": 5432,
+    "user": "postgres",
+    "password": "源库密码",
+    "db": "your_source_db",
+    "sslmode": "prefer"
+  },
+  "target": {
+    "host": "your-pg18-host",
+    "port": 5432,
+    "user": "postgres",
+    "password": "目标库密码",
+    "db": "postgres",
+    "sslmode": "prefer"
+  },
+  "targetdb": "your_source_db",
+  "workers": 4,
+  "copydata": true,
+  "verify": true,
+  "createtarget": true,
+  "droptarget": false,
+  "refreshmatviews": true,
+  "analyze": true,
+  "migrateowners": false,
+  "migrateacls": false,
+  "migrateroles": false,
+  "incremental": false,
+  "incrkeys": [],
+  "watermarkfile": "pgmigrate-watermark.json",
+  "includetables": [],
+  "excludetables": []
+}

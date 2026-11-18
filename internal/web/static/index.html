@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PostgreSQL 11 → 18 全库迁移工具</title>
+<style>
+:root{
+  --bg:#0d1117; --card:#161b22; --card2:#1c2330; --border:#2d333b;
+  --text:#e6edf3; --muted:#8b949e; --accent:#2f81f7; --ok:#3fb950; --warn:#d29922;
+  --err:#f85149; --run:#a371f7;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+body{background:var(--bg); color:var(--text); font-family:"Microsoft YaHei","Segoe UI",system-ui,sans-serif; font-size:14px; line-height:1.5;}
+.wrap{max-width:1200px; margin:0 auto; padding:20px;}
+h1{font-size:22px; margin-bottom:4px;}
+h1 .arrow{color:var(--accent);}
+.sub{color:var(--muted); margin-bottom:18px; font-size:13px;}
+.card{background:var(--card); border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:14px;}
+.card h2{font-size:15px; margin-bottom:12px; display:flex; align-items:center; gap:8px;}
+.badge{font-size:11px; padding:2px 8px; border-radius:10px; background:var(--card2); color:var(--muted); border:1px solid var(--border);}
+.grid2{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+@media(max-width:900px){.grid2{grid-template-columns:1fr;}}
+.frow{display:grid; grid-template-columns:86px 1fr 86px 130px; gap:8px; margin-bottom:8px; align-items:center;}
+.frow2{display:grid; grid-template-columns:86px 1fr; gap:8px; margin-bottom:8px; align-items:center;}
+label.f{color:var(--muted); font-size:13px; text-align:right;}
+input[type=text],input[type=password],input[type=number],select{
+  background:var(--card2); border:1px solid var(--border); color:var(--text);
+  border-radius:6px; padding:7px 10px; width:100%; outline:none; font-size:13px;}
+input:focus,select:focus{border-color:var(--accent);}
+button{background:var(--accent); color:#fff; border:none; border-radius:6px; padding:8px 16px; cursor:pointer; font-size:13px;}
+button:hover{filter:brightness(1.15);}
+button.ghost{background:var(--card2); border:1px solid var(--border); color:var(--text);}
+button.danger{background:var(--err);}
+button:disabled{opacity:.45; cursor:not-allowed;}
+.testout{margin-top:6px; font-size:12px; padding:8px 10px; border-radius:6px; display:none; white-space:pre-wrap; word-break:break-all;}
+.testout.ok{display:block; background:rgba(63,185,80,.08); border:1px solid rgba(63,185,80,.4); color:var(--ok);}
+.testout.bad{display:block; background:rgba(248,81,73,.08); border:1px solid rgba(248,81,73,.4); color:var(--err);}
+.opts{display:flex; flex-wrap:wrap; gap:10px 18px;}
+.opt{display:flex; align-items:center; gap:6px; color:var(--text); font-size:13px;}
+.opt input{accent-color:var(--accent);}
+.actions{display:flex; gap:10px; align-items:center; margin-top:4px;}
+.startbtn{padding:10px 26px; font-size:15px; background:var(--ok);}
+.startbtn:hover{filter:brightness(1.1);}
+.statrow{display:flex; flex-wrap:wrap; gap:12px; margin-bottom:12px;}
+.chip{background:var(--card2); border:1px solid var(--border); border-radius:8px; padding:8px 14px; min-width:110px;}
+.chip .k{font-size:11px; color:var(--muted);}
+.chip .v{font-size:16px; font-weight:600;}
+.pbarwrap{background:var(--card2); border-radius:8px; height:22px; overflow:hidden; border:1px solid var(--border); margin-bottom:12px; position:relative;}
+.pbar{height:100%; background:linear-gradient(90deg,var(--accent),#58a6ff); width:0%; transition:width .6s;}
+.ptext{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:12px; color:#fff; text-shadow:0 1px 2px #000;}
+.phase{color:var(--run); font-weight:600; margin-bottom:8px;}
+table{width:100%; border-collapse:collapse; font-size:12.5px;}
+th,td{padding:6px 8px; border-bottom:1px solid var(--border); text-align:left; white-space:nowrap;}
+th{color:var(--muted); font-weight:500; position:sticky; top:0; background:var(--card);}
+td.wraptd{white-space:normal; word-break:break-all;}
+.st-pending{color:var(--muted);} .st-copying{color:var(--accent); font-weight:600;}
+.st-done{color:var(--ok);} .st-failed{color:var(--err); font-weight:600;} .st-skipped{color:var(--warn);}
+.tblbox{max-height:300px; overflow:auto; border:1px solid var(--border); border-radius:8px;}
+.logbox{background:#0a0e14; border:1px solid var(--border); border-radius:8px; padding:10px; height:280px; overflow:auto;
+  font-family:Consolas,Monaco,monospace; font-size:12px; line-height:1.45;}
+.l-info{color:#9da7b3;} .l-ok{color:var(--ok);} .l-warn{color:var(--warn);} .l-error{color:var(--err);}
+.l-ts{color:#55606c; margin-right:6px;}
+.errbox{background:rgba(248,81,73,.08); border:1px solid rgba(248,81,73,.4); color:var(--err);
+  border-radius:8px; padding:10px 14px; margin-bottom:12px; display:none; white-space:pre-wrap;}
+.warnlist{background:rgba(210,153,34,.07); border:1px solid rgba(210,153,34,.4); border-radius:8px;
+  padding:10px 14px; margin-bottom:12px; display:none;}
+.warnlist div{color:var(--warn); font-size:12.5px;}
+.hidden{display:none;}
+.footnote{color:var(--muted); font-size:12px; margin-top:14px;}
+.spin{display:inline-block; width:14px; height:14px; border:2px solid var(--accent); border-top-color:transparent;
+  border-radius:50%; animation:sp .8s linear infinite; vertical-align:-2px;}
+@keyframes sp{to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>PostgreSQL 11 <span class="arrow">→</span> 18 全库迁移工具</h1>
+  <div class="sub">纯 Go 实现 · 源库：<b>substation_new</b> · 自动创建目标库 · 全库对象 + 数据 + 校验 · 无需 pg_dump</div>
+
+  <div class="grid2">
+    <div class="card">
+      <h2>① 源库连接 <span class="badge">PostgreSQL 11</span></h2>
+      <div class="frow"><label class="f">主机</label><input type="text" id="s_host" value="localhost">
+        <label class="f">端口</label><input type="text" id="s_port" value="5432"></div>
+      <div class="frow"><label class="f">用户名</label><input type="text" id="s_user" value="postgres">
+        <label class="f">密码</label><input type="password" id="s_pass"></div>
+      <div class="frow2"><label class="f">数据库</label><input type="text" id="s_db" value="substation_new"></div>
+      <div class="frow2"><label class="f">SSL 模式</label>
+        <select id="s_ssl"><option value="prefer" selected>prefer（自动）</option><option value="disable">disable</option><option value="require">require</option><option value="verify-full">verify-full</option></select></div>
+      <button class="ghost" id="btnTestS" onclick="testConn('source')">测试源库连接</button>
+      <div class="testout" id="outS"></div>
+    </div>
+    <div class="card">
+      <h2>② 目标库连接 <span class="badge">PostgreSQL 18</span></h2>
+      <div class="frow"><label class="f">主机</label><input type="text" id="t_host" value="localhost">
+        <label class="f">端口</label><input type="text" id="t_port" value="5432"></div>
+      <div class="frow"><label class="f">用户名</label><input type="text" id="t_user" value="postgres">
+        <label class="f">密码</label><input type="password" id="t_pass"></div>
+      <div class="frow2"><label class="f">管理库</label><input type="text" id="t_db" value="postgres" title="用于创建目标库的管理连接库"></div>
+      <div class="frow2"><label class="f">目标库</label><input type="text" id="t_targetdb" value="substation_new" title="要创建并迁入的数据库名"></div>
+      <div class="frow2"><label class="f">SSL 模式</label>
+        <select id="t_ssl"><option value="prefer" selected>prefer（自动）</option><option value="disable">disable</option><option value="require">require</option><option value="verify-full">verify-full</option></select></div>
+      <button class="ghost" id="btnTestT" onclick="testConn('target')">测试目标库连接</button>
+      <div class="testout" id="outT"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>③ 迁移选项</h2>
+    <div class="opts">
+      <label class="opt"><input type="checkbox" id="o_copydata" checked> 拷贝表数据</label>
+      <label class="opt"><input type="checkbox" id="o_verify" checked> 完成后校验行数/序列</label>
+      <label class="opt"><input type="checkbox" id="o_createtarget" checked> 目标库不存在时自动创建</label>
+      <label class="opt"><input type="checkbox" id="o_drop"> 删除重建目标库（危险）</label>
+      <label class="opt"><input type="checkbox" id="o_matview" checked> 刷新物化视图</label>
+      <label class="opt"><input type="checkbox" id="o_analyze" checked> ANALYZE 统计</label>
+      <label class="opt"><input type="checkbox" id="o_owner"> 迁移属主</label>
+      <label class="opt"><input type="checkbox" id="o_acl"> 迁移权限(ACL)</label>
+      <label class="opt"><input type="checkbox" id="o_roles"> 迁移角色</label>
+      <label class="opt">并发线程 <input type="number" id="o_workers" value="4" min="1" max="64" style="width:60px;"></label>
+      <label class="opt"><input type="checkbox" id="o_incr"> 增量同步模式（需先完成一次全量）</label>
+      <label class="opt">增量列覆盖 <input type="text" id="o_incrkeys" placeholder="public.t1=col[:pk|ts], 逗号分隔" style="width:210px;"></label>
+      <label class="opt">排除表 <input type="text" id="o_exclude" placeholder="public.tmp*, 如多个用逗号分隔" style="width:220px;"></label>
+      <label class="opt"><button class="ghost" style="font-size:12px;padding:4px 10px;" onclick="clearSaved()">清空已记住的填写内容</button></label>
+    </div>
+    <div class="actions" style="margin-top:14px;">
+      <button class="startbtn" id="btnStart" onclick="startMigrate()">开始迁移</button>
+      <button class="ghost" id="btnExt" onclick="checkExts()">扩展兼容性检查</button>
+      <button class="ghost" id="btnIncr" onclick="checkIncr()">增量方案探测</button>
+      <button class="danger" id="btnCancel" onclick="cancelMigrate()" disabled>取消</button>
+      <button class="ghost" id="btnReport" onclick="downloadReport()" style="display:none;">下载迁移报告(JSON)</button>
+      <span id="runningHint" style="color:var(--run);display:none;"><span class="spin"></span> 任务运行中……</span>
+    </div>
+  </div>
+
+  <div class="card hidden" id="extCard">
+    <h2>扩展兼容性 <span class="badge">离线容器重点检查</span></h2>
+    <div class="tblbox" id="extBox" style="max-height:280px;"></div>
+    <div class="footnote">
+      官方 postgres 镜像自带全部 contrib 扩展（pg_trgm、uuid-ossp、hstore 等）；PostGIS/TimescaleDB 等
+      第三方扩展需改用包含它们的镜像（如 postgis/postgis:18）。本检查只读，不会安装任何东西。
+    </div>
+  </div>
+
+  <div class="card hidden" id="progressCard">
+    <h2>迁移进度</h2>
+    <div class="errbox" id="errbox"></div>
+    <div class="warnlist" id="warnlist"></div>
+    <div class="phase" id="phase">待机</div>
+    <div class="pbarwrap"><div class="pbar" id="pbar"></div><div class="ptext" id="ptext">0%</div></div>
+    <div class="statrow">
+      <div class="chip"><div class="k">数据表</div><div class="v" id="stTables">0/0</div></div>
+      <div class="chip"><div class="k">已拷贝行数</div><div class="v" id="stRows">0</div></div>
+      <div class="chip"><div class="k">数据量</div><div class="v" id="stBytes">0B</div></div>
+      <div class="chip"><div class="k">失败表</div><div class="v" id="stFail">0</div></div>
+      <div class="chip"><div class="k">用时</div><div class="v" id="stElapsed">-</div></div>
+    </div>
+    <div style="color:var(--muted);font-size:12px;margin-bottom:6px;" id="currentTables"></div>
+    <div class="tblbox" id="tblbox"></div>
+  </div>
+
+  <div class="card hidden" id="verifyCard">
+    <h2>数据校验结果</h2>
+    <div id="verifySummary" style="margin-bottom:10px;"></div>
+    <div class="tblbox" id="verifyBox" style="max-height:260px;"></div>
+  </div>
+
+  <div class="card hidden" id="incrCard">
+    <h2>增量同步方案 <span class="badge">主键/时间列水位探测</span></h2>
+    <div class="tblbox" id="incrBox" style="max-height:300px;"></div>
+    <div class="footnote">
+      水位增量：全量迁移完成后工具自动记录每表水位（pgmigrate-watermark.json）；勾选"增量同步模式"再次运行时，
+      只搬运水位之后新增/修改的行并按主键 upsert 合并。<b>不支持同步 DELETE</b>，切换前请以最后一次校验为准。
+      无主键/复合主键表无法增量，需人工指定单调列或全量重跑。
+    </div>
+  </div>
+
+  <div class="card hidden" id="logCard">
+    <h2>运行日志</h2>
+    <div class="logbox" id="logbox"></div>
+  </div>
+
+  <div class="footnote">
+    说明：数据拷贝使用 COPY 流式传输；索引/约束/触发器/外键在数据载入后创建以保证速度；目标库必须为空（或勾选“删除重建”）。
+    迁移期间请勿在源库执行 DDL。取消任务不会回滚已完成部分。
+  </div>
+</div>
+
+<script>
+let lastSeq = 0, lastState = "idle", startedAt = null, finishedAt = null, pollTimer = null;
+const $ = id => document.getElementById(id);
+
+function connOf(prefix){
+  return {
+    host: $(''+prefix+'_host').value.trim(),
+    port: parseInt($(''+prefix+'_port').value)||5432,
+    user: $(''+prefix+'_user').value.trim(),
+    password: $(''+prefix+'_pass').value,
+    db: $(''+prefix+'_db').value.trim(),
+    sslmode: $(''+prefix+'_ssl').value
+  };
+}
+
+async function post(url, body){
+  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  return await r.json();
+}
+
+async function testConn(role){
+  const out = role==='source' ? $('outS') : $('outT');
+  out.className = 'testout'; out.textContent = '测试中……'; out.style.display='block';
+  const body = role==='source' ? connOf('s') : Object.assign(connOf('t'), {role:'target', targetdb: $('t_targetdb').value.trim()});
+  try{
+    const res = await post('/api/test', body);
+    if(res.ok){
+      let s = '✓ 连接成功\n' + res.version + '\n当前库: ' + res.db;
+      if(res.size) s += '  大小: ' + res.size;
+      if(res.encoding) s += '  编码: ' + res.encoding;
+      if(role==='target' && 'dbexists' in res) s += '\n目标库 ' + $('t_targetdb').value.trim() + (res.dbexists ? ' 已存在' : ' 不存在（将自动创建）');
+      out.className = 'testout ok'; out.textContent = s;
+    } else {
+      out.className = 'testout bad'; out.textContent = '✗ 连接失败：' + (res.error||'未知错误');
+    }
+  }catch(e){ out.className='testout bad'; out.textContent='✗ 请求失败：'+e; }
+}
+
+function fmtN(n){ return (n||0).toLocaleString('en-US'); }
+function fmtB(b){
+  b = b||0; const u=['B','KB','MB','GB','TB']; let i=0;
+  while(b>=1024 && i<u.length-1){ b/=1024; i++; }
+  return b.toFixed(1)+u[i];
+}
+function fmtDur(ms){
+  const s = Math.floor(ms/1000);
+  const h=Math.floor(s/3600), m=Math.floor(s%3600/60), ss=s%60;
+  return (h? h+'h':'') + (m? m+'m':'') + ss + 's';
+}
+
+async function startMigrate(){
+  if(!confirm('确认开始迁移？请确保目标库内容可被覆盖/删除。')) return;
+  const exclude = splitList($('o_exclude').value);
+  const body = {
+    source: connOf('s'),
+    target: Object.assign(connOf('t'), {}),
+    targetdb: $('t_targetdb').value.trim(),
+    workers: parseInt($('o_workers').value)||4,
+    copydata: $('o_copydata').checked,
+    verify: $('o_verify').checked,
+    createtarget: $('o_createtarget').checked,
+    drop: false,
+    droptarget: $('o_drop').checked,
+    refreshmatviews: $('o_matview').checked,
+    analyze: $('o_analyze').checked,
+    migrateowners: $('o_owner').checked,
+    migrateacls: $('o_acl').checked,
+    migrateroles: $('o_roles').checked,
+    incremental: $('o_incr').checked,
+    incrkeys: splitList($('o_incrkeys').value),
+    includetables: [],
+    excludetables: exclude
+  };
+  const res = await post('/api/start', body);
+  if(res.error){ alert('启动失败：' + res.error); return; }
+  lastSeq = 0; startedAt = null; finishedAt = null;
+  $('logbox').innerHTML=''; $('tblbox').innerHTML='';
+  $('progressCard').classList.remove('hidden');
+  $('logCard').classList.remove('hidden');
+  $('verifyCard').classList.add('hidden');
+  $('btnReport').style.display='none';
+  setRunning(true);
+  if(!pollTimer) pollTimer = setInterval(poll, 1000);
+}
+
+async function checkExts(){
+  const body = { source: connOf('s'), target: connOf('t'), targetdb: $('t_targetdb').value.trim() };
+  const box = $('extBox');
+  $('extCard').classList.remove('hidden');
+  box.innerHTML = '<div style="color:var(--muted);padding:10px;">检查中……（分别连接源库与目标服务器，只读操作）</div>';
+  try{
+    const res = await post('/api/extcheck', body);
+    if(!res.ok){ box.innerHTML = '<div style="color:var(--err);padding:10px;">✗ '+esc(res.error||'检查失败')+'</div>'; return; }
+    if(res.total === 0){ box.innerHTML = '<div style="color:var(--ok);padding:10px;">✅ 源库没有自定义扩展，无需考虑扩展兼容性</div>'; return; }
+    let html = '';
+    if(res.missing>0) html += '<div style="color:var(--err);margin-bottom:8px;">❌ '+res.missing+' 个扩展在目标服务器缺失——离线容器需改用包含它们的镜像，或向容器内手动安装扩展文件，否则相关对象将迁移失败</div>';
+    else if(res.version_diff>0) html += '<div style="color:var(--warn);margin-bottom:8px;">⚠ '+res.version_diff+' 个扩展版本与源库不同，将按目标镜像自带版本安装（一般兼容）</div>';
+    else html += '<div style="color:var(--ok);margin-bottom:8px;">✅ 全部 '+res.total+' 个扩展均可在目标服务器安装</div>';
+    html += '<table><thead><tr><th>扩展</th><th>源版本</th><th>源模式</th><th>目标可用</th><th>目标版本</th><th>结论</th></tr></thead><tbody>';
+    for(const it of res.items){
+      const st = it.status==='ok' ? '<span style="color:var(--ok)">✅ 兼容</span>'
+        : it.status==='version-diff' ? '<span style="color:var(--warn)">⚠ 版本不同</span>'
+        : '<span style="color:var(--err)">❌ 缺失</span>';
+      html += '<tr><td>'+esc(it.name)+'</td><td>'+esc(it.src_version)+'</td><td>'+esc(it.schema)+'</td><td>'+(it.available?'是':'否')+
+        '</td><td>'+esc(it.target_version||'-')+'</td><td class="wraptd" style="white-space:normal;max-width:420px;">'+st+'<br><span style="color:var(--muted)">'+esc(it.note)+'</span></td></tr>';
+    }
+    html += '</tbody></table>';
+    box.innerHTML = html;
+  }catch(e){ box.innerHTML = '<div style="color:var(--err);padding:10px;">✗ 请求失败：'+e+'</div>'; }
+}
+
+async function checkIncr(){
+  const body = { source: connOf('s'), target: connOf('t'), targetdb: $('t_targetdb').value.trim(), incrkeys: splitList($('o_incrkeys').value) };
+  const box = $('incrBox');
+  $('incrCard').classList.remove('hidden');
+  box.innerHTML = '<div style="color:var(--muted);padding:10px;">探测中……（连接源库分析主键/时间列，只读操作）</div>';
+  try{
+    const res = await post('/api/incrplan', body);
+    if(!res.ok){ box.innerHTML = '<div style="color:var(--err);padding:10px;">✗ '+esc(res.error||'探测失败')+'</div>'; return; }
+    let html = '<div style="margin-bottom:8px;">共 '+res.total+' 张表：<span style="color:var(--ok)">可增量 '+res.usable+'</span>（主键水位 '+res.pk+' / 时间列水位 '+res.ts+'），<span style="color:var(--err)">无法增量 '+res.none+'</span></div>';
+    html += '<table><thead><tr><th>表</th><th>方式</th><th>水位列</th><th>主键</th><th>估算行数</th><th>说明</th></tr></thead><tbody>';
+    for(const p of res.plans){
+      const mode = p.mode==='pk' ? '<span style="color:var(--ok)">主键水位</span>'
+        : p.mode==='ts' ? '<span style="color:var(--accent)">时间列水位</span>'
+        : '<span style="color:var(--err)">不支持</span>';
+      html += '<tr><td>'+esc(p.schema+'.'+p.table)+'</td><td>'+mode+'</td><td>'+esc(p.column||'-')+'</td><td>'+esc((p.pkcols||[]).join(', ')||'-')+'</td><td>'+fmtN(p.estrows)+'</td><td class="wraptd" style="white-space:normal;max-width:360px;color:var(--muted)">'+esc(p.note||'')+'</td></tr>';
+    }
+    html += '</tbody></table>';
+    box.innerHTML = html;
+  }catch(e){ box.innerHTML = '<div style="color:var(--err);padding:10px;">✗ 请求失败：'+e+'</div>'; }
+}
+
+function splitList(s){
+  return (s||'').split(',').map(x=>x.trim()).filter(Boolean);
+}
+
+async function cancelMigrate(){ if(confirm('确认取消迁移任务？')) await post('/api/cancel', {}); }
+
+function setRunning(v){
+  $('btnStart').disabled = v;
+  $('btnCancel').disabled = !v;
+  $('runningHint').style.display = v ? 'inline' : 'none';
+  document.querySelectorAll('.card input,.card button.ghost,.card select').forEach(el=>{ el.disabled = v; });
+}
+
+async function poll(){
+  try{
+    const r = await fetch('/api/status?since='+lastSeq);
+    const d = await r.json();
+    const st = d.status;
+    for(const l of (d.logs||[])){
+      lastSeq = Math.max(lastSeq, l.seq);
+      appendLog(l);
+    }
+    if(st.state === 'idle'){ return; }
+    if(startedAt===null && st.started_at){ startedAt = new Date(st.started_at); }
+    if(st.finished_at){ finishedAt = new Date(st.finished_at); }
+    $('progressCard').classList.remove('hidden');
+    $('phase').textContent = (st.phase_detail || st.phase || '') + (st.state==='done' ? ' ✅' : st.state==='failed' ? ' ❌' : st.state==='canceled' ? ' ⛔' : '');
+    // progress: prefer table-based rows vs estimate
+    let pct = 0;
+    if(st.est_rows > 0) pct = Math.min(100, st.rows_copied / st.est_rows * 100);
+    if(st.state==='done') pct = 100;
+    $('pbar').style.width = pct.toFixed(1)+'%';
+    $('ptext').textContent = pct.toFixed(1)+'%  ('+fmtN(st.rows_copied)+' / '+fmtN(st.est_rows)+' 行)';
+    $('stTables').textContent = st.done_tables + '/' + st.total_tables;
+    $('stRows').textContent = fmtN(st.rows_copied);
+    $('stBytes').textContent = fmtB(st.bytes_copied);
+    $('stFail').textContent = st.failed_tables||0;
+    if(startedAt){
+      const end = finishedAt || new Date();
+      $('stElapsed').textContent = fmtDur(end - startedAt);
+    }
+    $('currentTables').textContent = st.current ? '正在拷贝：' + st.current : '';
+    // warnings + error
+    const wl = $('warnlist');
+    if(st.warnings && st.warnings.length){
+      wl.style.display='block';
+      wl.innerHTML = st.warnings.map(x=>'<div>⚠ '+esc(x)+'</div>').join('');
+    } else wl.style.display='none';
+    const eb = $('errbox');
+    if(st.error){ eb.style.display='block'; eb.textContent = '❌ '+st.error; } else eb.style.display='none';
+    renderTables(st.tables||[]);
+    if(st.verification){ renderVerify(st.verification); }
+    if(st.state==='running'){ setRunning(true); }
+    else {
+      setRunning(false);
+      $('btnReport').style.display='inline-block';
+      if(finishedAt){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
+    }
+  }catch(e){ /* transient */ }
+}
+
+function esc(s){ const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
+
+function appendLog(l){
+  const box = $('logbox');
+  const div = document.createElement('div');
+  div.className = 'l-'+(l.level||'info');
+  const ts = new Date(l.ts).toLocaleTimeString('zh-CN', {hour12:false});
+  div.innerHTML = '<span class="l-ts">'+ts+'</span>' + esc(l.msg);
+  box.appendChild(div);
+  while(box.childNodes.length > 600) box.removeChild(box.firstChild);
+  box.scrollTop = box.scrollHeight;
+}
+
+const stateName = {pending:'等待', copying:'拷贝中', done:'完成', failed:'失败', skipped:'跳过'};
+
+function renderTables(tables){
+  if(!tables.length){ return; }
+  const sorted = tables.slice().sort((a,b)=> (b.sizebytes||0)-(a.sizebytes||0));
+  let html = '<table><thead><tr><th>模式.表名</th><th>估算行数</th><th>已拷贝</th><th>大小</th><th>状态</th><th>用时</th><th>错误</th></tr></thead><tbody>';
+  for(const t of sorted){
+    html += '<tr><td>'+esc(t.schema+'.'+t.name)+'</td><td>'+fmtN(t.estrows)+'</td><td>'+fmtN(t.rows)+'</td><td>'+fmtB(t.sizebytes)+
+      '</td><td class="st-'+t.state+'">'+(stateName[t.state]||t.state)+'</td><td>'+(t.seconds?t.seconds.toFixed(1)+'s':'-')+
+      '</td><td class="wraptd" style="max-width:280px;color:var(--err)">'+esc(t.err||'')+'</td></tr>';
+  }
+  html += '</tbody></table>';
+  $('tblbox').innerHTML = html;
+}
+
+let lastVerify = null;
+function renderVerify(v){
+  lastVerify = v;
+  const bad = (v.errors||[]).length>0 || !v.ok;
+  $('verifySummary').innerHTML = v.ok
+    ? '<span style="color:var(--ok)">✅ 校验通过：全部表行数与序列值一致（下表可搜索每张表的源/目标行数）</span>'
+    : '<span style="color:var(--err)">❌ 存在不一致项，详见下表与日志</span>';
+  let html = '<div style="margin-bottom:8px;"><input type="text" id="verifyFilter" placeholder="搜索表名，如 inspect / record / patrol" style="max-width:320px;display:inline-block;" oninput="renderVerifyTable()"> <span style="color:var(--muted);font-size:12px;">列出每张表在源库与目标库的实际行数</span></div><div id="verifyTable"></div>';
+  $('verifyBox').innerHTML = html;
+  renderVerifyTable();
+}
+
+function renderVerifyTable(){
+  if(!lastVerify) return;
+  const v = lastVerify;
+  const kw = (($('verifyFilter')||{}).value||'').toLowerCase();
+  let html = '<table><thead><tr><th>表</th><th>源库行数</th><th>目标库行数</th><th>结果</th></tr></thead><tbody>';
+  let shown = 0, mism = 0;
+  const row = (t, kind) => {
+    const name = (t.schema+'.'+t.name).toLowerCase();
+    if(kw && !name.includes(kw)) return;
+    shown++;
+    const ok = t.ok;
+    if(!ok) mism++;
+    html += '<tr><td>'+esc(t.schema+'.'+t.name)+'</td><td>'+fmtN(t.src)+'</td><td>'+fmtN(t.dst)+
+      '</td><td>'+(ok?'<span style="color:var(--ok)">✓ 一致</span>':'<span style="color:var(--err)">✗ 不一致</span>')+'</td></tr>';
+  };
+  for(const t of (v.tables||[])) row(t);
+  for(const s of (v.seqs||[])){
+    if(s.ok) continue; mism++;
+    html += '<tr><td>序列 '+esc(s.schema+'.'+s.name)+'</td><td>'+esc(s.src)+'</td><td>'+esc(s.dst)+'</td><td style="color:var(--err)">✗ 值不一致</td></tr>';
+  }
+  if(shown===0 && mism===0){
+    html += '<tr><td colspan="4" style="color:var(--ok)">无差异</td></tr>';
+  }
+  html += '</tbody></table>';
+  if(shown > 300) html = '<div style="color:var(--muted)">（匹配 '+shown+' 行，仅显示前 300 行，请用搜索缩小范围）</div>' + html;
+  const box = $('verifyTable');
+  if(box) box.innerHTML = html;
+}
+
+function downloadReport(){
+  fetch('/api/status?since=0').then(r=>r.json()).then(d=>{
+    const blob = new Blob([JSON.stringify(d, null, 2)], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'migration-report.json';
+    a.click();
+  });
+}
+
+// ===== 表单持久化：浏览器本地自动记住，重启工具/刷新页面都不丢 =====
+const FORM_KEY = 'pgmigrate_form_v1';
+const TEXT_IDS = ['s_host','s_port','s_user','s_pass','s_db','s_ssl','t_host','t_port','t_user','t_pass','t_db','t_targetdb','t_ssl','o_workers','o_exclude','o_incrkeys'];
+const CHECK_IDS = ['o_copydata','o_verify','o_createtarget','o_drop','o_matview','o_analyze','o_owner','o_acl','o_roles','o_incr'];
+let formRestored = false;
+
+function saveForm(){
+  try{
+    const f = {}, c = {};
+    TEXT_IDS.forEach(id=>{ f[id] = $(id).value; });
+    CHECK_IDS.forEach(id=>{ c[id] = $(id).checked; });
+    localStorage.setItem(FORM_KEY, JSON.stringify({f, c}));
+  }catch(e){}
+}
+function restoreForm(){
+  try{
+    const d = JSON.parse(localStorage.getItem(FORM_KEY) || 'null');
+    if(!d) return false;
+    Object.keys(d.f||{}).forEach(id=>{ const el=$(id); if(el && d.f[id]!==undefined && d.f[id]!==null) el.value = d.f[id]; });
+    Object.keys(d.c||{}).forEach(id=>{ const el=$(id); if(el && typeof d.c[id]==='boolean') el.checked = d.c[id]; });
+    return true;
+  }catch(e){ return false; }
+}
+let saveTimer = null;
+function onFormChange(){
+  if(saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveForm, 300);
+}
+document.addEventListener('input', onFormChange, true);
+document.addEventListener('change', onFormChange, true);
+
+function clearSaved(){
+  try{ localStorage.removeItem(FORM_KEY); }catch(e){}
+  location.reload();
+}
+
+// 服务端预填（serve --config 或上次成功发起迁移的 pgmigrate-last.json）
+// 优先级：浏览器已记住的内容 > 服务端预填 > 页面默认值
+formRestored = restoreForm();
+fetch('/api/defaults').then(r=>r.json()).then(d=>{
+  if(!d || !d.source) return;
+  const s=d.source||{}, t=d.target||{};
+  const set=(id,v)=>{ const el=$(id); if(v!==undefined&&v!==null&&v!=='' && el && !el.value) el.value=v; };
+  set('s_host',s.host); set('s_port',s.port); set('s_user',s.user); set('s_pass',s.password); set('s_db',s.db); set('s_ssl',s.sslmode);
+  set('t_host',t.host); set('t_port',t.port); set('t_user',t.user); set('t_pass',t.password); set('t_db',t.db); set('t_ssl',t.sslmode);
+  set('t_targetdb',d.targetdb);
+  if(d.workers && !$('o_workers').value) $('o_workers').value=d.workers;
+  const chk=(id,v)=>{ if(typeof v==='boolean' && !formRestored) $(id).checked=v; };
+  chk('o_copydata',d.copydata); chk('o_verify',d.verify); chk('o_createtarget',d.createtarget);
+  chk('o_drop',d.droptarget); chk('o_matview',d.refreshmatviews); chk('o_analyze',d.analyze);
+  chk('o_owner',d.migrateowners); chk('o_acl',d.migrateacls); chk('o_roles',d.migrateroles);
+  if(d.excludetables&&d.excludetables.length && !$('o_exclude').value) $('o_exclude').value=d.excludetables.join(',');
+}).catch(()=>{});
+
+// initial state check (page reload during run)
+poll();
+if(!pollTimer) pollTimer = setInterval(poll, 1000);
+</script>
+</body>
+</html>
