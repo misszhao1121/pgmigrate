@@ -397,18 +397,18 @@ func TestSCRAMAuth(t *testing.T) {
 }
 
 func TestDSNParse(t *testing.T) {
-	c, err := ParseDSN("postgres://adm:P%40ss@198.51.100.5:5433/substation_new?sslmode=require")
+	c, err := ParseDSN("postgres://adm:P%40ss@198.51.100.5:5433/my_database?sslmode=require")
 	if err != nil {
 		t.Fatalf("url dsn: %v", err)
 	}
-	if c.Host != "198.51.100.5" || c.Port != 5433 || c.User != "adm" || c.Password != "P@ss" || c.DB != "substation_new" || c.SSLMode != "require" {
+	if c.Host != "198.51.100.5" || c.Port != 5433 || c.User != "adm" || c.Password != "P@ss" || c.DB != "my_database" || c.SSLMode != "require" {
 		t.Errorf("parsed = %+v", c)
 	}
-	c2, err := ParseDSN("host= 127.0.0.1 port=5432 user=pg password='p w x' dbname=substation_new sslmode=disable")
+	c2, err := ParseDSN("host= 127.0.0.1 port=5432 user=pg password='p w x' dbname=my_database sslmode=disable")
 	if err != nil {
 		t.Fatalf("kv dsn: %v", err)
 	}
-	if c2.Host != "127.0.0.1" || c2.Password != "p w x" || c2.DB != "substation_new" || c2.SSLMode != "disable" {
+	if c2.Host != "127.0.0.1" || c2.Password != "p w x" || c2.DB != "my_database" || c2.SSLMode != "disable" {
 		t.Errorf("parsed = %+v", c2)
 	}
 }

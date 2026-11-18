@@ -76,7 +76,7 @@ td.wraptd{white-space:normal; word-break:break-all;}
 <body>
 <div class="wrap">
   <h1>PostgreSQL 11 <span class="arrow">→</span> 18 全库迁移工具</h1>
-  <div class="sub">纯 Go 实现 · 源库：<b>substation_new</b> · 自动创建目标库 · 全库对象 + 数据 + 校验 · 无需 pg_dump</div>
+  <div class="sub">纯 Go 实现 · 源库：<b>my_database</b> · 自动创建目标库 · 全库对象 + 数据 + 校验 · 无需 pg_dump</div>
 
   <div class="grid2">
     <div class="card">
@@ -85,7 +85,7 @@ td.wraptd{white-space:normal; word-break:break-all;}
         <label class="f">端口</label><input type="text" id="s_port" value="5432"></div>
       <div class="frow"><label class="f">用户名</label><input type="text" id="s_user" value="postgres">
         <label class="f">密码</label><input type="password" id="s_pass"></div>
-      <div class="frow2"><label class="f">数据库</label><input type="text" id="s_db" value="substation_new"></div>
+      <div class="frow2"><label class="f">数据库</label><input type="text" id="s_db" value="my_database"></div>
       <div class="frow2"><label class="f">SSL 模式</label>
         <select id="s_ssl"><option value="prefer" selected>prefer（自动）</option><option value="disable">disable</option><option value="require">require</option><option value="verify-full">verify-full</option></select></div>
       <button class="ghost" id="btnTestS" onclick="testConn('source')">测试源库连接</button>
@@ -98,7 +98,7 @@ td.wraptd{white-space:normal; word-break:break-all;}
       <div class="frow"><label class="f">用户名</label><input type="text" id="t_user" value="postgres">
         <label class="f">密码</label><input type="password" id="t_pass"></div>
       <div class="frow2"><label class="f">管理库</label><input type="text" id="t_db" value="postgres" title="用于创建目标库的管理连接库"></div>
-      <div class="frow2"><label class="f">目标库</label><input type="text" id="t_targetdb" value="substation_new" title="要创建并迁入的数据库名"></div>
+      <div class="frow2"><label class="f">目标库</label><input type="text" id="t_targetdb" value="my_database" title="要创建并迁入的数据库名"></div>
       <div class="frow2"><label class="f">SSL 模式</label>
         <select id="t_ssl"><option value="prefer" selected>prefer（自动）</option><option value="disable">disable</option><option value="require">require</option><option value="verify-full">verify-full</option></select></div>
       <button class="ghost" id="btnTestT" onclick="testConn('target')">测试目标库连接</button>

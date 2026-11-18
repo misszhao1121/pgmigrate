@@ -4,7 +4,7 @@
 **PG 11（源）→ PG 18（目标）** 设计，内置中文 Web 操作页面，无需安装
 `pg_dump` / `pg_restore` / `psql` 等任何外部客户端。
 
-典型场景：把 `substation_new` 数据库从旧服务器的 PostgreSQL 11 整库搬迁到
+典型场景：把 `my_database` 数据库从旧服务器的 PostgreSQL 11 整库搬迁到
 PostgreSQL 18。
 
 ## 功能特性
@@ -40,9 +40,9 @@ chmod +x pgmigrate-linux-amd64      # 首次运行需赋予执行权限
 
 在您自己的电脑浏览器打开 `http://<服务器IP>:8765`（注意放行防火墙端口）：
 
-1. 填写 **源库**（PG11）连接信息，数据库名 `substation_new`，点"测试源库连接"
+1. 填写 **源库**（PG11）连接信息，数据库名 `my_database`，点"测试源库连接"
 2. 填写 **目标库**（PG18）连接信息，"管理库"填 `postgres`（用于创建目标库），
-   "目标库"填 `substation_new`，点"测试目标库连接"
+   "目标库"填 `my_database`，点"测试目标库连接"
 3. 按需勾选选项（默认：拷贝数据 + 完成后校验 + 自动建库 + 刷新物化视图 + ANALYZE）
 4. 点"**开始迁移**"，实时查看进度与日志；结束后查看校验结果，可下载 JSON 报告
 
@@ -53,7 +53,7 @@ chmod +x pgmigrate-linux-amd64      # 首次运行需赋予执行权限
 
 ```bash
 ./pgmigrate-linux-amd64 run \
-  -source "host=pg11-host.example.com port=5432 user=postgres password=xxx dbname=substation_new sslmode=prefer" \
+  -source "host=pg11-host.example.com port=5432 user=postgres password=xxx dbname=my_database sslmode=prefer" \
   -target "host=pg18-host.example.com port=5432 user=postgres password=xxx dbname=postgres sslmode=prefer" \
   -workers 8
 ```
@@ -64,7 +64,7 @@ chmod +x pgmigrate-linux-amd64      # 首次运行需赋予执行权限
 ./pgmigrate-linux-amd64 run -config config.json
 ```
 
-常用参数：`-targetdb substation_new`（目标库名，默认与源库同名）、`-workers N`
+常用参数：`-targetdb my_database`（目标库名，默认与源库同名）、`-workers N`
 （并行线程数）、`-drop-target`（删除重建目标库）、`-exclude "public.tmp*"`
 （排除表，支持通配符）、`-owners/-acls/-roles`（属主/权限/角色，默认关闭）、
 `-no-data`（仅迁移结构）、`-no-verify`。
@@ -131,7 +131,7 @@ CLI：`-incremental` 开启，`-incr-keys "public.t1=gxsj:ts,public.t2=id:pk"` �
 
 ## PostGIS 空间数据迁移（替代 postgis_restore.pl）
 
-如果源库装了 PostGIS（如 `substation_new` 之前用 postgis_restore.pl 处理的
+如果源库装了 PostGIS（如 `my_database` 之前用 postgis_restore.pl 处理的
 场景），本工具内置了等价处理，**无需再用 Perl 脚本过滤 dump**：
 
 - 扩展自有的类型/函数/操作符/表（geometry 类型、st_* 函数、spatial_ref_sys
