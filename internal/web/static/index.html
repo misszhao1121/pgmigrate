@@ -121,6 +121,8 @@ td.wraptd{white-space:normal; word-break:break-all;}
       <label class="opt">并发线程 <input type="number" id="o_workers" value="4" min="1" max="64" style="width:60px;"></label>
       <label class="opt"><input type="checkbox" id="o_incr"> 增量同步模式（需先完成一次全量）</label>
       <label class="opt">增量列覆盖 <input type="text" id="o_incrkeys" placeholder="public.t1=col[:pk|ts], 逗号分隔" style="width:210px;"></label>
+      <label class="opt"><button class="ghost" style="font-size:12px;padding:4px 10px;" onclick="pickTables()">选择表…</button></label>
+      <span id="pickedHint" style="color:var(--accent);font-size:12px;display:none;"></span>
       <label class="opt">排除表 <input type="text" id="o_exclude" placeholder="public.tmp*, 如多个用逗号分隔" style="width:220px;"></label>
       <label class="opt"><button class="ghost" style="font-size:12px;padding:4px 10px;" onclick="clearSaved()">清空已记住的填写内容</button></label>
     </div>
@@ -173,6 +175,21 @@ td.wraptd{white-space:normal; word-break:break-all;}
       水位增量：全量迁移完成后工具自动记录每表水位（pgmigrate-watermark.json）；勾选"增量同步模式"再次运行时，
       只搬运水位之后新增/修改的行并按主键 upsert 合并。<b>不支持同步 DELETE</b>，切换前请以最后一次校验为准。
       无主键/复合主键表无法增量，需人工指定单调列或全量重跑。
+    </div>
+  </div>
+
+  <div class="card hidden" id="pickCard">
+    <h2>选择要迁移的表 <span class="badge">留空 = 全库</span></h2>
+    <div style="margin-bottom:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <input type="text" id="pickFilter" placeholder="搜索表名…" style="max-width:260px;display:inline-block;" oninput="renderPickList()">
+      <label class="opt"><input type="checkbox" id="pickAll" onchange="toggleAllPick(this.checked)"> 全选/全不选</label>
+      <span style="color:var(--muted);font-size:12px;">勾选分区父表会自动带上全部子分区；只勾子分区也会带上父表。其它对象（索引/约束/触发器）会随之联动。</span>
+    </div>
+    <div class="tblbox" id="pickBox" style="max-height:340px;"></div>
+    <div class="actions" style="margin-top:10px;">
+      <button id="btnPickOk" onclick="applyPick()">确定</button>
+      <button class="ghost" onclick="closePick()">取消（迁移全部表）</button>
+      <span id="pickCount" style="color:var(--muted);font-size:12px;"></span>
     </div>
   </div>
 
@@ -257,7 +274,7 @@ async function startMigrate(){
     migrateroles: $('o_roles').checked,
     incremental: $('o_incr').checked,
     incrkeys: splitList($('o_incrkeys').value),
-    includetables: [],
+    includetables: picked || [],
     excludetables: exclude
   };
   const res = await post('/api/start', body);
@@ -321,6 +338,72 @@ async function checkIncr(){
 
 function splitList(s){
   return (s||'').split(',').map(x=>x.trim()).filter(Boolean);
+}
+
+// ===== 表选择器 =====
+let pickTablesAll = [];
+let picked = null; // null = migrate all; array = selected list
+
+function pickTables(){
+  const body = { source: connOf('s') };
+  $('pickCard').classList.remove('hidden');
+  $('pickBox').innerHTML = '<div style="color:var(--muted);padding:10px;">读取表清单中……</div>';
+  post('/api/tablelist', body).then(res=>{
+    if(!res.ok){ $('pickBox').innerHTML = '<div style="color:var(--err);padding:10px;">✗ '+esc(res.error||'读取失败')+'</div>'; return; }
+    pickTablesAll = res.tables||[];
+    renderPickList();
+  }).catch(e=>{ $('pickBox').innerHTML = '<div style="color:var(--err);padding:10px;">✗ 请求失败：'+e+'</div>'; });
+}
+
+const kindName = {table:'普通表', parent:'分区父表', partition:'分区子表'};
+function renderPickList(){
+  const kw = ($('pickFilter').value||'').toLowerCase();
+  const preSel = new Set(picked || []);
+  let html = '<table><thead><tr><th style="width:36px;"></th><th>表名</th><th>类型</th><th>估算行数</th><th>大小</th></tr></thead><tbody>';
+  for(const t of pickTablesAll){
+    const full = t.schema+'.'+t.name;
+    if(kw && !full.toLowerCase().includes(kw)) continue;
+    const checked = preSel.has(full);
+    html += '<tr><td><input type="checkbox" class="pickrow" data-full="'+esc(full)+'" '+(checked?'checked':'')+' onchange="onPickRow(this)"></td>'+
+      '<td>'+esc(full)+'</td><td>'+(kindName[t.kind]||t.kind)+'</td><td>'+fmtN(t.estrows)+'</td><td>'+fmtB(t.sizebytes)+'</td></tr>';
+  }
+  html += '</tbody></table>';
+  $('pickBox').innerHTML = html;
+  updatePickCount();
+}
+
+function onPickRow(){
+  const sel = [...document.querySelectorAll('.pickrow:checked')].map(x=>x.dataset.full);
+  picked = sel.length ? sel : [];
+  updatePickCount();
+}
+
+function toggleAllPick(v){
+  // only toggle visible rows
+  document.querySelectorAll('.pickrow').forEach(x=>{ x.checked = v; });
+  onPickRow();
+}
+
+function updatePickCount(){
+  const n = (picked||[]).length;
+  $('pickCount').textContent = picked===null ? '当前：迁移全部表' : '已选 '+n+' 张表';
+  const hint = $('pickedHint');
+  if(picked && picked.length){ hint.style.display='inline'; hint.textContent='已选 '+n+' 张表'; }
+  else if(picked && picked.length===0){ hint.style.display='inline'; hint.textContent='未选择任何表（将迁移全部表）'; }
+  else hint.style.display='none';
+}
+
+function applyPick(){
+  // server-side closure handles partition linkage; dedupe here
+  picked = [...new Set(picked||[])];
+  if(picked.length === 0) picked = null; // empty selection = migrate all
+  savePicked();
+  closePick();
+}
+
+function closePick(){
+  $('pickCard').classList.add('hidden');
+  updatePickCount();
 }
 
 async function cancelMigrate(){ if(confirm('确认取消迁移任务？')) await post('/api/cancel', {}); }
@@ -463,6 +546,19 @@ function downloadReport(){
 const FORM_KEY = 'pgmigrate_form_v1';
 const TEXT_IDS = ['s_host','s_port','s_user','s_pass','s_db','s_ssl','t_host','t_port','t_user','t_pass','t_db','t_targetdb','t_ssl','o_workers','o_exclude','o_incrkeys'];
 const CHECK_IDS = ['o_copydata','o_verify','o_createtarget','o_drop','o_matview','o_analyze','o_owner','o_acl','o_roles','o_incr'];
+
+// picked table list persistence (separate from form so arrays stay intact)
+const PICK_KEY = 'pgmigrate_picked_v1';
+function savePicked(){
+  try{ localStorage.setItem(PICK_KEY, JSON.stringify(picked)); }catch(e){}
+}
+function restorePicked(){
+  try{
+    const v = JSON.parse(localStorage.getItem(PICK_KEY) || 'null');
+    if(Array.isArray(v) && v.length) { picked = v; }
+  }catch(e){}
+}
+restorePicked();
 let formRestored = false;
 
 function saveForm(){

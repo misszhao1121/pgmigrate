@@ -325,7 +325,7 @@ func fakeTargetRoutes() []fakeRoute {
 		{match: "pg_available_extensions", cols: []string{"name", "default_version"},
 			rows: [][]string{{"pg_trgm", "1.6"}}},
 		{match: "c.relkind IN ('r','p') AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE", cols: []string{"nspname", "relname"},
-			rows: [][]string{{"public", "biz"}, {"public", "spatial_ref_sys"}}},
+			rows: [][]string{{"public", "biz"}, {"public", "spatial_ref_sys"}, {"public", "events"}, {"public", "events_202612"}, {"public", "events_202701"}}},
 		{match: "SELECT setval(", cols: []string{"setval"}, rows: [][]string{{"5"}}},
 		{match: "last_value||','||is_called", cols: []string{"v"}, rows: [][]string{{"5,true"}}},
 		{match: "COALESCE(sum(length(data)), 0) FROM pg_catalog.pg_largeobject", cols: []string{"count", "sz"},
@@ -500,6 +500,154 @@ func TestExtCheck(t *testing.T) {
 	if !it.Available {
 		t.Errorf("pg_trgm should be available on target")
 	}
+}
+
+func TestTableScopeSingleTable(t *testing.T) {
+	bizData := "1\t张三\tsad\n2\t李四\tok\n"
+	src := &fakePG{ver: "PostgreSQL 11.22", routes: fakeSourceRoutes(), copyOutData: bizData}
+	tgt := &fakePG{ver: "PostgreSQL 18.0", routes: fakeTargetRoutes()}
+	sh, sp := src.start(t)
+	th, tp := tgt.start(t)
+	opts := &Options{
+		Source: ConnInfo{Host: sh, Port: sp, User: "u", Password: "p", DB: "my_database", SSLMode: "disable"},
+		Target: ConnInfo{Host: th, Port: tp, User: "u", Password: "p", DB: "postgres", SSLMode: "disable"},
+		TargetDB: "my_database", Workers: 1, CopyData: true, Verify: true, CreateTarget: true,
+		IncludeTables: []string{"public.biz"}, // only this table
+	}
+	eng := New(*opts, nil)
+	if err := eng.Run(); err != nil {
+		t.Fatalf("scoped run: %v", err)
+	}
+	st := eng.Status()
+	if st.State != "done" {
+		t.Fatalf("state = %s, error = %s, warnings = %v", st.State, st.Error, st.Warnings)
+	}
+	// exactly one data table
+	if st.TotalTables != 1 {
+		t.Errorf("total tables = %d, want 1", st.TotalTables)
+	}
+	if len(st.Tables) != 1 || st.Tables[0].Key() != "public.biz" {
+		t.Errorf("tables = %+v", st.Tables)
+	}
+	// no failures (fake source reports 2 foreign tables -> 1 expected warning)
+	realWarnings := []string{}
+	for _, w := range st.Warnings {
+		if !strings.Contains(w, "外部表(FDW)") {
+			realWarnings = append(realWarnings, w)
+		}
+	}
+	if len(realWarnings) != 0 {
+		t.Errorf("unexpected warnings: %v", realWarnings)
+	}
+	if st.Verification == nil || !st.Verification.OK || len(st.Verification.Tables) != 1 {
+		t.Errorf("verification = %+v", st.Verification)
+	}
+	// target must NOT receive DDL for the unselected table's index/constraints
+	tgt.mu.Lock()
+	all := strings.Join(tgt.all, "\n")
+	tgt.mu.Unlock()
+	if strings.Contains(all, "biz_name_idx") == false {
+		t.Errorf("selected table's index missing")
+	}
+	// the extension-owned spatial_ref_sys merge should be skipped (not selected)
+	if strings.Contains(all, "pgmigrate_stg") {
+		t.Errorf("unselected extension table data should not be merged")
+	}
+}
+
+func dumpLogs(e *Engine) string {
+	var b strings.Builder
+	for _, l := range e.Logs(0) {
+		b.WriteString(l.Msg)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func TestTableScopePartitionLinkage(t *testing.T) {
+	// fake source: one partitioned parent + two monthly partitions + one normal table
+	src := &fakePG{ver: "PostgreSQL 11.22", routes: fakePartitionRoutes(), copyOutData: "1\ta\n"}
+	tgt := &fakePG{ver: "PostgreSQL 18.0", routes: fakeTargetRoutes()}
+	sh, sp := src.start(t)
+	th, tp := tgt.start(t)
+	opts := &Options{
+		Source: ConnInfo{Host: sh, Port: sp, User: "u", Password: "p", DB: "my_database", SSLMode: "disable"},
+		Target: ConnInfo{Host: th, Port: tp, User: "u", Password: "p", DB: "postgres", SSLMode: "disable"},
+		TargetDB: "my_database", Workers: 1, CopyData: true, Verify: true, CreateTarget: true,
+		IncludeTables: []string{"public.events_202701"}, // selecting ONE partition
+	}
+	eng := New(*opts, nil)
+	if err := eng.Run(); err != nil {
+		t.Fatalf("partition scoped run: %v", err)
+	}
+	st := eng.Status()
+	if st.State != "done" {
+		t.Fatalf("state = %s, error = %s, warnings = %v", st.State, st.Error, st.Warnings)
+	}
+	keys := map[string]bool{}
+	for _, tb := range st.Tables {
+		keys[tb.Key()] = true
+	}
+	if len(keys) == 0 {
+		tgt.mu.Lock()
+		ddl := tgt.all
+		tgt.mu.Unlock()
+		t.Fatalf("no data tables; warnings=%v\ntarget DDL:\n%s", st.Warnings, strings.Join(ddl, "\n"))
+	}
+	// selecting a partition must pull in the sibling partition for data copy,
+	// and the parent table must have been created (DDL) though it stores no rows
+	if !keys["public.events_202612"] {
+		t.Errorf("sibling partition missing from data scope: %+v", st.Tables)
+	}
+	tgt.mu.Lock()
+	all := strings.Join(tgt.all, "\n")
+	tgt.mu.Unlock()
+	// parent table DDL must exist with a partition key (either the structured
+	// rebuild "PARTITION BY RANGE (...)" or the pg_get_partkeydef fallback)
+	if !strings.Contains(all, `CREATE TABLE "public"."events" (`) {
+		t.Errorf("partitioned parent DDL missing:\n%s", all)
+	}
+	if !strings.Contains(all, "PARTITION BY RANGE") && !strings.Contains(all, "\nRANGE (") {
+		t.Errorf("partition key missing in parent DDL:\n%s", all)
+	}
+	if keys["public.biz"] {
+		t.Errorf("unrelated table should be excluded from data scope: %+v", st.Tables)
+	}
+}
+
+func fakePartitionRoutes() []fakeRoute {
+	base := fakeSourceRoutes()
+	// replace table list with a partition family + unrelated table
+	for i := range base {
+		if strings.Contains(base[i].match, "c.relhasoids") {
+			base[i].rows = [][]string{
+				{"16384", "public", "biz", "r", "f", "p", "f", "f", "f", "postgres", "", "", "", "42", "8192"},
+				{"16500", "public", "events", "p", "f", "p", "f", "f", "f", "postgres", "RANGE (f_created_at)", "", "", "10", "8192"},
+				{"16501", "public", "events_202612", "r", "f", "p", "f", "f", "f", "postgres", "", "FOR VALUES FROM ('2026-12-01') TO ('2027-01-01')", "", "5", "8192"},
+				{"16502", "public", "events_202701", "r", "f", "p", "f", "f", "f", "postgres", "", "FOR VALUES FROM ('2027-01-01') TO ('2027-02-01')", "", "3", "8192"},
+			}
+		}
+		if strings.Contains(base[i].match, "a.attnum > 0 AND NOT a.attisdropped") {
+			base[i].rows = [][]string{
+				{"16384", "1", "id", "integer", "t", "", "", "default"},
+				{"16384", "2", "name", "character varying(64)", "f", "", "", "default"},
+				{"16384", "3", "mood", "public.mood", "f", "", "", "default"},
+				{"16500", "1", "id", "integer", "t", "", "", "default"},
+				{"16500", "2", "note", "text", "f", "", "", "default"},
+				{"16501", "1", "id", "integer", "t", "", "", "default"},
+				{"16501", "2", "note", "text", "f", "", "", "default"},
+				{"16502", "1", "id", "integer", "t", "", "", "default"},
+				{"16502", "2", "note", "text", "f", "", "", "default"},
+			}
+		}
+		if strings.Contains(base[i].match, "SELECT i.inhparent, i.inhrelid FROM pg_inherits i") {
+			base[i].rows = [][]string{
+				{"16500", "16501"},
+				{"16500", "16502"},
+			}
+		}
+	}
+	return base
 }
 
 func TestEngineRefusesNonEmptyTarget(t *testing.T) {

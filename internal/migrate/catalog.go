@@ -572,9 +572,9 @@ func CollectCatalog(c *pgwire.Conn, o *Options) (*Catalog, error) {
 		return nil, fmt.Errorf("读取表列表失败: %w", err)
 	}
 	for _, t := range parseTableRows(r) {
-		if o.tableAllowed(t.Schema, t.Name) {
-			cat.Tables = append(cat.Tables, t)
-		}
+		// NOTE: scope filtering happens later in applyTableScope, which needs
+		// the FULL table set (partition closure spans unselected tables).
+		cat.Tables = append(cat.Tables, t)
 	}
 
 	// extension-owned tables (e.g. PostGIS public.spatial_ref_sys): the target
@@ -587,9 +587,7 @@ func CollectCatalog(c *pgwire.Conn, o *Options) (*Catalog, error) {
 		for _, t := range parseTableRows(r) {
 			t.ExtOwned = true
 			t.MergeSafe = t.Name == "spatial_ref_sys" // whitelist: safe to merge like postgis_restore.pl
-			if o.tableAllowed(t.Schema, t.Name) {
-				cat.ExtTables = append(cat.ExtTables, t)
-			}
+			cat.ExtTables = append(cat.ExtTables, t)
 		}
 	}
 	byOid := map[uint32]*TableInfo{}
@@ -857,7 +855,160 @@ func CollectCatalog(c *pgwire.Conn, o *Options) (*Catalog, error) {
 		}
 		return cat.Tables[a].Name < cat.Tables[b].Name
 	})
+	applyTableScope(cat, o)
 	return cat, nil
+}
+
+// applyTableScope narrows the catalog down to the selected table set
+// (Options.IncludeTables). When any tables are explicitly included, everything
+// not related to them is dropped so that indexes/constraints/triggers/policies
+// of unselected tables never generate failing DDL. Partition families are kept
+// together: selecting a parent brings all its partitions, selecting a partition
+// brings its parent chain (and sibling partitions stay out).
+// When nothing is included, only the exclude patterns apply.
+func applyTableScope(cat *Catalog, o *Options) {
+	// build keep-map over the FULL table set
+	keep := map[string]bool{}
+	keepOID := map[uint32]bool{}
+	for _, t := range cat.Tables {
+		keep[t.Key()] = o.tableAllowed(t.Schema, t.Name)
+		if keep[t.Key()] {
+			keepOID[t.OID] = true
+		}
+	}
+	if len(o.IncludeTables) > 0 {
+		// partition closure over the full graph: child -> parent -> all children
+		changed := true
+		for changed {
+			changed = false
+			for _, t := range cat.Tables {
+				k := t.Key()
+				if keep[k] {
+					continue
+				}
+				parentKept := t.PartOf != 0 && keepOID[t.PartOf]
+				parentOldStyle := t.ParentOID != 0 && keepOID[t.ParentOID]
+				childKept := false
+				if t.Kind == 'p' {
+					for _, c := range cat.Tables {
+						if c.PartOf == t.OID && keep[c.Key()] {
+							childKept = true
+							break
+						}
+					}
+				}
+				if parentKept || parentOldStyle || childKept {
+					keep[k] = true
+					keepOID[t.OID] = true
+					changed = true
+				}
+			}
+		}
+	} else {
+		return // no includes: keep tableAllowed results (excludes only)
+	}
+
+	// tables
+	keptTables := make([]*TableInfo, 0, len(cat.Tables))
+	for _, t := range cat.Tables {
+		if keep[t.Key()] {
+			keptTables = append(keptTables, t)
+		}
+	}
+	cat.Tables = keptTables
+	keptExt := make([]*TableInfo, 0, len(cat.ExtTables))
+	for _, t := range cat.ExtTables {
+		if keep[t.Key()] {
+			keptExt = append(keptExt, t)
+		}
+	}
+	cat.ExtTables = keptExt
+
+	// indexes / constraints / policies / triggers filter by owning table
+	cat.Indexes = filterIndexes(cat.Indexes, keep)
+	cat.Constraints = filterSlice(cat.Constraints, func(x ConstraintInfo) bool { return keep[x.Schema+"."+x.Table] })
+	cat.Policies = filterSlice(cat.Policies, func(x PolicyInfo) bool { return keep[x.Schema+"."+x.Table] })
+	cat.Triggers = filterTriggers(cat.Triggers, keep)
+
+	// sequence OWNED BY: keep only when the owning table is selected
+	cat.SeqOwns = filterSlice(cat.SeqOwns, func(x SeqOwn) bool { return keep[x.TabSch+"."+x.TabName] })
+	// sequences owned by dropped tables lose their ALTER OWNER statement
+	if len(o.IncludeTables) > 0 {
+		owned := map[string]bool{}
+		for _, so := range cat.SeqOwns {
+			owned[so.SeqSch+"."+so.SeqName] = true
+		}
+		cat.Seqs = filterSlice(cat.Seqs, func(x SeqInfo) bool {
+			return owned[x.Schema+"."+x.Name] || o.tableAllowed(x.Schema, x.Name)
+		})
+	}
+
+	// comments mentioning dropped tables are filtered line-wise
+	cat.Comments = filterComments(cat.Comments, keep)
+	// views/matviews are NOT dropped (they may reference selected tables), but
+	// keep views whose whole definition is unrelated? simplest: keep all views
+	// (they were created successfully independent of table scope before).
+}
+
+func filterSlice[T any](items []T, pred func(T) bool) []T {
+	out := make([]T, 0, len(items))
+	for _, x := range items {
+		if pred(x) {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+func filterIndexes(indexes []IndexInfo, keep map[string]bool) []IndexInfo {
+	out := make([]IndexInfo, 0, len(indexes))
+	for _, ix := range indexes {
+		if keep[ix.TabSch+"."+ix.TabName] {
+			out = append(out, ix)
+		}
+	}
+	return out
+}
+
+func filterTriggers(triggers []TriggerInfo, keep map[string]bool) []TriggerInfo {
+	out := make([]TriggerInfo, 0, len(triggers))
+	for _, tr := range triggers {
+		// pg_get_triggerdef text contains "ON schema.table" — match loosely
+		for k := range keep {
+			qk := QuoteIdent(strings.SplitN(k, ".", 2)[0]) + "." + QuoteIdent(strings.SplitN(k, ".", 2)[1])
+			if strings.Contains(tr.Def, " ON "+qk+" ") || strings.Contains(tr.Def, " ON ONLY "+qk+" ") ||
+				strings.Contains(tr.Def, " ON "+qk+"(") {
+				out = append(out, tr)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func filterComments(comments []string, keep map[string]bool) []string {
+	out := make([]string, 0, len(comments))
+	for _, c := range comments {
+		match := false
+		for k := range keep {
+			sch, tab, _ := strings.Cut(k, ".")
+			if strings.Contains(c, " ON TABLE "+QuoteIdent(sch)+"."+QuoteIdent(tab)+" ") ||
+				strings.Contains(c, " ON COLUMN "+QuoteIdent(sch)+"."+QuoteIdent(tab)+".") ||
+				strings.Contains(c, " ON CONSTRAINT ") && strings.Contains(c, " ON "+QuoteIdent(sch)+"."+QuoteIdent(tab)+" ") {
+				match = true
+				break
+			}
+		}
+		// comments not tied to a table (types/functions/schemas) are kept
+		if match || !tableBoundComment(c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func tableBoundComment(c string) bool {
+	return strings.Contains(c, " ON TABLE ") || strings.Contains(c, " ON COLUMN ")
 }
 
 func ancestorsHaveConstraint(idxChild map[uint32]uint32, conIdx map[uint32]bool, oid uint32) bool {
