@@ -310,8 +310,12 @@ func (e *Engine) Run() error {
 			if okInstall {
 				e.logf("ok", "扩展 %s 安装完成（目标版本 %s，模式 %s）", ex.Name, ver, ex.Schema)
 			} else {
-				e.addWarning("扩展 %s 安装失败，依赖该扩展的对象将迁移失败。最后一次服务器错误：%s。常见原因：离线容器内缺少扩展的动态库/控制文件——请确认镜像是否包含该扩展（PostGIS 需 postgis/postgis 镜像），或进入容器执行 ls $(pg_config --sharedir)/extension | grep %s 检查",
-					ex.Name, oneLine(extErr), ex.Name)
+				hint := classifyExtError(extErr)
+				if hint == "" {
+					hint = "常见原因：离线容器内缺少扩展的动态库/控制文件——请确认镜像是否包含该扩展（PostGIS 需 postgis/postgis 镜像），或进入容器执行 ls $(pg_config --sharedir)/extension | grep " + ex.Name + " 检查"
+				}
+				e.addWarning("扩展 %s 安装失败，依赖该扩展的对象将迁移失败。最后一次服务器错误：%s。解决办法：%s",
+					ex.Name, oneLine(extErr), hint)
 			}
 		}
 	} else {

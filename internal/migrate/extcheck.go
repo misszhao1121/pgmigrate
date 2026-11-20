@@ -59,6 +59,19 @@ func createExtensionBestEffort(tgt *pgwire.Conn, ex ExtInfo) (bool, string) {
 	return false, lastErr
 }
 
+// classifyExtError maps common CREATE EXTENSION failures to actionable hints.
+func classifyExtError(errText string) string {
+	e := strings.ToLower(errText)
+	switch {
+	case strings.Contains(e, "42501") && (strings.Contains(e, "system catalog modifications") || strings.Contains(e, "permission denied to create")):
+		return "目标连接账号不是超级用户，无法安装需要在 pg_catalog 创建对象的非受信扩展。请改用超级用户账号（如 postgres），或在容器内以超级用户预先执行 CREATE EXTENSION 后重跑"
+	case strings.Contains(e, "could not access file"):
+		return "容器镜像内缺少该扩展的动态库（.so）。请改用包含该扩展的镜像（PostGIS 用 postgis/postgis 镜像），或进入容器检查 $(pg_config --pkglibdir)"
+	case strings.Contains(e, "extension") && strings.Contains(e, "is not available"):
+		return "扩展控制文件缺失。检查 $(pg_config --sharedir)/extension 目录"
+	}
+	return ""
+}
 // ExtCheckItem describes one source extension and its availability on the
 // target server.
 type ExtCheckItem struct {
