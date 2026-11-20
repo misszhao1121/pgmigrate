@@ -25,7 +25,9 @@ func extLits(exts []ExtInfo) []string {
 //
 // This matters for offline containers where only the versions bundled in the
 // image exist: a pinned source version may be unavailable.
-func createExtensionBestEffort(tgt *pgwire.Conn, ex ExtInfo) bool {
+// Returns true on success; on failure returns the LAST server error so the
+// log can show the real cause (e.g. missing shared library in the image).
+func createExtensionBestEffort(tgt *pgwire.Conn, ex ExtInfo) (bool, string) {
 	base := fmt.Sprintf("CREATE EXTENSION IF NOT EXISTS %s", QuoteIdent(ex.Name))
 	withSchema := ""
 	if ex.Relocatable && ex.Schema != "" && ex.Schema != "public" {
@@ -46,12 +48,15 @@ func createExtensionBestEffort(tgt *pgwire.Conn, ex ExtInfo) bool {
 		candidates = append(candidates, base+withSchema)
 	}
 	candidates = append(candidates, base)
+	var lastErr string
 	for _, sql := range candidates {
 		if _, err := tgt.Exec(sql); err == nil {
-			return true
+			return true, ""
+		} else {
+			lastErr = err.Error()
 		}
 	}
-	return false
+	return false, lastErr
 }
 
 // ExtCheckItem describes one source extension and its availability on the

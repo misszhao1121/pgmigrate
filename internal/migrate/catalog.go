@@ -3,6 +3,7 @@ package migrate
 import (
 	"fmt"
 	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1024,6 +1025,41 @@ func ancestorsHaveConstraint(idxChild map[uint32]uint32, conIdx map[uint32]bool,
 		}
 		oid = p
 	}
+}
+
+// legacyLibRe matches $libdir references to OLD PostGIS major versions. When
+// the target gets PostGIS 3.x from the image, these legacy C functions cannot
+// be created (the .so is not in the container) and are fully superseded by the
+// new extension's ST_* implementations — they must be skipped, not migrated.
+var legacyLibRe = regexp.MustCompile(`\$libdir/(postgis-2|rtpostgis-2|topology-2|postgis_sfcgal-2)`)
+
+// dropLegacyPostgisObjects removes functions/aggregates whose definition binds
+// to a PostGIS 2.x shared library. Detected after extension install failures:
+// if postgis could not be installed there is no geometry type anyway, and when
+// it IS installed (3.x) these legacy stubs are obsolete.
+func dropLegacyPostgisObjects(cat *Catalog) (funcs, aggs int) {
+	keepF := make([]FuncInfo, 0, len(cat.Funcs))
+	for _, f := range cat.Funcs {
+		if legacyLibRe.MatchString(f.Def) {
+			continue
+		}
+		keepF = append(keepF, f)
+	}
+	funcs = len(cat.Funcs) - len(keepF)
+	cat.Funcs = keepF
+
+	keepA := make([]AggInfo, 0, len(cat.Aggs))
+	for _, a := range cat.Aggs {
+		// aggregates reference their transition/final functions; legacy PostGIS
+		// aggregates (e.g. st_accum) all live under the postgis-2 lib via their fns
+		if legacyLibRe.MatchString(a.TransFn) || legacyLibRe.MatchString(a.FinalFn) {
+			continue
+		}
+		keepA = append(keepA, a)
+	}
+	aggs = len(cat.Aggs) - len(keepA)
+	cat.Aggs = keepA
+	return funcs, aggs
 }
 
 func collectComments(c *pgwire.Conn) []string {

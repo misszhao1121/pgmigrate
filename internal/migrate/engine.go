@@ -306,14 +306,24 @@ func (e *Engine) Run() error {
 			if ver != ex.Version {
 				e.logf("warn", "扩展 %s 源库版本 %s 与目标可用版本 %s 不同，将按目标版本安装（数据格式通常兼容，若报错请核对）", ex.Name, ex.Version, ver)
 			}
-			if createExtensionBestEffort(tgt, ex) {
+			okInstall, extErr := createExtensionBestEffort(tgt, ex)
+			if okInstall {
 				e.logf("ok", "扩展 %s 安装完成（目标版本 %s，模式 %s）", ex.Name, ver, ex.Schema)
 			} else {
-				e.addWarning("扩展 %s 安装失败，依赖该扩展的对象将迁移失败", ex.Name)
+				e.addWarning("扩展 %s 安装失败，依赖该扩展的对象将迁移失败。最后一次服务器错误：%s。常见原因：离线容器内缺少扩展的动态库/控制文件——请确认镜像是否包含该扩展（PostGIS 需 postgis/postgis 镜像），或进入容器执行 ls $(pg_config --sharedir)/extension | grep %s 检查",
+					ex.Name, oneLine(extErr), ex.Name)
 			}
 		}
 	} else {
 		e.logf("info", "源库没有自定义扩展")
+	}
+
+	// ---------- legacy PostGIS objects ----------
+	// Functions bound to $libdir/postgis-2.x can never be created on a 3.x
+	// image (missing .so) and are superseded by the new extension. Drop them
+	// from the plan whether or not the new postgis installed successfully.
+	if nf, na := dropLegacyPostgisObjects(cat); nf+na > 0 {
+		e.logf("info", "已跳过 %d 个绑定 postgis-2.x 动态库的遗留函数/聚合（目标 PostGIS 3.x 自带等价 ST_* 实现，无需迁移）", nf+na)
 	}
 
 	// ---------- schemas ----------

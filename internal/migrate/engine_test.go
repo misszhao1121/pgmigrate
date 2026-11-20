@@ -242,7 +242,7 @@ func isCommand(q string) bool {
 func fakeSourceRoutes() []fakeRoute {
 	return []fakeRoute{
 		{match: "FROM pg_database d WHERE d.datname = current_database()", cols: []string{"datname", "enc", "encid", "collate", "ctype", "size"},
-			rows: [][]string{{"my_database", "UTF8", "6", "C", "C", "12345"}}},
+			rows: [][]string{{"substation_new", "UTF8", "6", "C", "C", "12345"}}},
 		{match: "FROM pg_extension e", cols: []string{"extname", "extversion", "nspname", "extrelocatable"},
 			rows: [][]string{{"plpgsql", "1.0", "pg_catalog", "f"}, {"pg_trgm", "1.4", "public", "t"}}},
 		{match: "pg_get_userbyid(n.nspowner)", cols: []string{"nspname", "owner"},
@@ -339,10 +339,10 @@ func fakeTargetRoutes() []fakeRoute {
 func runEngineTest(t *testing.T, opts *Options, src *fakePG, tgt *fakePG) (*Status, error) {
 	sh, sp := src.start(t)
 	th, tp := tgt.start(t)
-	opts.Source = ConnInfo{Host: sh, Port: sp, User: "u", Password: "p", DB: "my_database", SSLMode: "disable"}
+	opts.Source = ConnInfo{Host: sh, Port: sp, User: "u", Password: "p", DB: "substation_new", SSLMode: "disable"}
 	opts.Target = ConnInfo{Host: th, Port: tp, User: "u", Password: "p", DB: "postgres", SSLMode: "disable"}
 	if opts.TargetDB == "" {
-		opts.TargetDB = "my_database"
+		opts.TargetDB = "substation_new"
 	}
 	opts.normalize()
 	eng := New(*opts, nil)
@@ -406,7 +406,7 @@ func TestEngineEndToEnd(t *testing.T) {
 	ddl := strings.Join(tgt.all, "\n")
 	tgt.mu.Unlock()
 	for _, want := range []string{
-		`CREATE DATABASE "my_database"`,
+		`CREATE DATABASE "substation_new"`,
 		`CREATE EXTENSION IF NOT EXISTS "pg_trgm" VERSION '1.4'`,
 		`CREATE TYPE "public"."mood" AS ENUM ('sad', 'ok', 'happy')`,
 		`CREATE SEQUENCE "public"."biz_id_seq" AS bigint`,
@@ -455,7 +455,7 @@ func TestEngineEndToEnd(t *testing.T) {
 	incOpts := &Options{
 		Source: opts.Source, Target: opts.Target,
 		Workers: 1, CopyData: true, Verify: true, Incremental: true,
-		WatermarkFile: wmPath, TargetDB: "my_database",
+		WatermarkFile: wmPath, TargetDB: "substation_new",
 	}
 	eng2 := New(*incOpts, nil)
 	if err := eng2.Run(); err != nil {
@@ -484,7 +484,7 @@ func TestExtCheck(t *testing.T) {
 	tgt := &fakePG{ver: "PostgreSQL 18.0", routes: fakeTargetRoutes()}
 	sh, sp := src.start(t)
 	th, tp := tgt.start(t)
-	srcCfg := &pgwire.Config{Host: sh, Port: sp, User: "u", Password: "p", DB: "my_database", SSLMode: "disable"}
+	srcCfg := &pgwire.Config{Host: sh, Port: sp, User: "u", Password: "p", DB: "substation_new", SSLMode: "disable"}
 	tgtCfg := &pgwire.Config{Host: th, Port: tp, User: "u", Password: "p", DB: "postgres", SSLMode: "disable"}
 	items, err := CheckExtensionCompatibility(ctxBG(), srcCfg, tgtCfg)
 	if err != nil {

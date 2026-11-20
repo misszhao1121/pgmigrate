@@ -47,7 +47,7 @@ func (s *httpServer) listenAndServe() {
 	_ = hs.Shutdown(ctx)
 }
 
-var version = "1.0.7"
+var version = "1.0.8"
 
 func usage() {
 	fmt.Print(`pgmigrate - PostgreSQL 11 → 18 全库迁移工具
@@ -59,7 +59,7 @@ func usage() {
   pgmigrate run -source <DSN> -target <DSN> [选项]
       命令行模式直接迁移。
       DSN 支持 URL 形式 postgres://user:pass@host:5432/db?sslmode=disable
-      或关键字形式 "host=x port=5432 user=x password=x dbname=my_database sslmode=prefer"
+      或关键字形式 "host=x port=5432 user=x password=x dbname=substation_new sslmode=prefer"
 
   pgmigrate run -config config.json
       从 JSON 配置文件读取（字段与 Web API /api/start 相同）。
