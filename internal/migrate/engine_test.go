@@ -324,6 +324,7 @@ func fakeTargetRoutes() []fakeRoute {
 			rows: [][]string{{"postgres"}, {"u"}}},
 		{match: "pg_available_extensions", cols: []string{"name", "default_version"},
 			rows: [][]string{{"pg_trgm", "1.6"}}},
+		{match: "SELECT extversion FROM pg_extension WHERE extname =", cols: []string{"extversion"}, rows: nil},
 		{match: "c.relkind IN ('r','p') AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE", cols: []string{"nspname", "relname"},
 			rows: [][]string{{"public", "biz"}, {"public", "spatial_ref_sys"}, {"public", "events"}, {"public", "events_202612"}, {"public", "events_202701"}}},
 		{match: "SELECT setval(", cols: []string{"setval"}, rows: [][]string{{"5"}}},

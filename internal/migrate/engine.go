@@ -226,15 +226,25 @@ func (e *Engine) Run() error {
 				return e.fail(fmt.Errorf("连接目标库 %s 失败: %w", opts.TargetDB, err))
 			}
 			objCount := 0
-			if rr, err := probe.Query(`SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+			extObjCount := 0
+			if rr, err := probe.Query(`SELECT count(*) FILTER (WHERE NOT EXISTS (
+					SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')),
+				count(*) FILTER (WHERE EXISTS (
+					SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e'))
+				FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 				WHERE c.relkind IN ('r','p','v','m','S') AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\_%'`); err == nil {
 				objCount = int(int64v(rr, 0, 0))
+				extObjCount = int(int64v(rr, 0, 1))
 			}
 			probe.Close()
 			if objCount > 0 {
-				return e.fail(fmt.Errorf("目标库 %q 已存在且包含 %d 个对象，拒绝在非空库上迁移；请勾选“删除重建目标库”或手工清理", opts.TargetDB, objCount))
+				return e.fail(fmt.Errorf("目标库 %q 已存在且包含 %d 个非扩展对象，拒绝在非空库上迁移；请勾选“删除重建目标库”或手工清理（提示：若您手工预装了 PostGIS 等扩展，这些对象不计入检查，可正常迁移）", opts.TargetDB, objCount))
 			}
-			e.logf("ok", "目标库 %q 存在且为空，直接使用", opts.TargetDB)
+			if extObjCount > 0 {
+				e.logf("ok", "目标库 %q 已存在，包含 %d 个扩展预装对象（如手工安装的 PostGIS），将直接使用", opts.TargetDB, extObjCount)
+			} else {
+				e.logf("ok", "目标库 %q 存在且为空，直接使用", opts.TargetDB)
+			}
 		}
 	}
 	if !targetExists {
@@ -301,6 +311,15 @@ func (e *Engine) Run() error {
 			ver, ok := avail[ex.Name]
 			if !ok {
 				e.addWarning("目标服务器缺少扩展 %s（源库版本 %s）。离线容器环境请注意：官方 postgres 镜像已自带全部 contrib 扩展；PostGIS/TimescaleDB 等第三方扩展必须改用包含它们的镜像（如 postgis/postgis:18）或向容器内手动安装扩展文件。依赖该扩展的对象将迁移失败", ex.Name, ex.Version)
+				continue
+			}
+			// already installed in THIS database? (e.g. manually pre-installed)
+			var curVer string
+			if rr, err := tgt.Query(fmt.Sprintf("SELECT extversion FROM pg_extension WHERE extname = %s", QuoteLit(ex.Name))); err == nil && len(rr.Rows) > 0 {
+				curVer = rr.Col(0, 0)
+			}
+			if curVer != "" {
+				e.logf("ok", "扩展 %s 已存在于目标库（版本 %s），跳过安装", ex.Name, curVer)
 				continue
 			}
 			if ver != ex.Version {
