@@ -64,13 +64,32 @@ func classifyExtError(errText string) string {
 	e := strings.ToLower(errText)
 	switch {
 	case strings.Contains(e, "42501") && (strings.Contains(e, "system catalog modifications") || strings.Contains(e, "permission denied to create")):
-		return "目标连接账号不是超级用户，无法安装需要在 pg_catalog 创建对象的非受信扩展。请改用超级用户账号（如 postgres），或在容器内以超级用户预先执行 CREATE EXTENSION 后重跑"
+		return "PostGIS 等非受信扩展需要在 pg_catalog 创建对象，而目标服务器 allow_system_table_mods=off（PG16+ 默认关闭，关闭时超级用户也被禁止）。K3s/docker 解决：给 postgres 进程加启动参数 -c allow_system_table_mods=on 并重启实例，装完扩展后可关回。或先用超级用户手工 CREATE EXTENSION 后重跑（v1.0.9+ 会跳过已装扩展）"
 	case strings.Contains(e, "could not access file"):
 		return "容器镜像内缺少该扩展的动态库（.so）。请改用包含该扩展的镜像（PostGIS 用 postgis/postgis 镜像），或进入容器检查 $(pg_config --pkglibdir)"
 	case strings.Contains(e, "extension") && strings.Contains(e, "is not available"):
 		return "扩展控制文件缺失。检查 $(pg_config --sharedir)/extension 目录"
 	}
 	return ""
+}
+
+// isSuperuser reports whether the current connection user has SUPERUSER.
+func isSuperuser(c *pgwire.Conn) bool {
+	r, err := c.Query("SELECT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user)")
+	if err != nil || len(r.Rows) == 0 {
+		return false
+	}
+	return r.Col(0, 0) == "t"
+}
+
+// systemTableModsAllowed reads allow_system_table_mods on the target.
+func systemTableModsAllowed(c *pgwire.Conn) bool {
+	r, err := c.Query("SHOW allow_system_table_mods")
+	if err != nil || len(r.Rows) == 0 {
+		return false // pre-16 servers don't have it; absence treated as not-allowed for warning purposes
+	}
+	v := strings.ToLower(strings.TrimSpace(r.Col(0, 0)))
+	return v == "on" || v == "true"
 }
 // ExtCheckItem describes one source extension and its availability on the
 // target server.

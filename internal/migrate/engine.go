@@ -300,6 +300,26 @@ func (e *Engine) Run() error {
 		needExts = append(needExts, ex)
 	}
 	if len(needExts) > 0 {
+		// pre-flight: detect untrusted-extension readiness on the target
+		super := isSuperuser(tgt)
+		modsAllowed := systemTableModsAllowed(tgt)
+		hasUntrusted := false
+		for _, ex := range needExts {
+			if ex.Name == "postgis" || ex.Name == "postgis_topology" || ex.Name == "postgis_raster" ||
+				ex.Name == "timescaledb" || ex.Name == "citus" {
+				hasUntrusted = true
+				break
+			}
+		}
+		if hasUntrusted && !super {
+			e.addWarning("当前目标账号不是超级用户：安装 PostGIS/TimescaleDB 等非受信扩展会失败（需要在 pg_catalog 创建对象）。建议改用超级用户账号，或预先在目标库手工 CREATE EXTENSION")
+		}
+		if hasUntrusted && super && !modsAllowed {
+			e.addWarning("目标为超级用户但 allow_system_table_mods=off（PG16+ 默认）：安装 PostGIS 等需要写 pg_catalog 的扩展将被拒绝且超级用户也无法豁免。解决：给 postgres 进程加启动参数 -c allow_system_table_mods=on 重启后安装，装完可关回。K3s: kubectl edit sts/deploy 在 command 加该参数；或手工预装扩展后重跑（本工具会自动跳过已装扩展）")
+		}
+		if hasUntrusted && super && modsAllowed {
+			e.logf("ok", "扩展安装前置检查通过：超级用户 + allow_system_table_mods=on")
+		}
 		avail := map[string]string{}
 		if rr, err := tgt.Query(fmt.Sprintf(`SELECT name, default_version FROM pg_available_extensions WHERE name IN (%s)`,
 			strings.Join(extLits(needExts), ", "))); err == nil {

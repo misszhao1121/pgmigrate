@@ -47,7 +47,7 @@ func (s *httpServer) listenAndServe() {
 	_ = hs.Shutdown(ctx)
 }
 
-var version = "1.0.9"
+var version = "1.0.10"
 
 func usage() {
 	fmt.Print(`pgmigrate - PostgreSQL 11 → 18 全库迁移工具
